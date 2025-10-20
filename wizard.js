@@ -12,6 +12,7 @@ const chip = (id, val, current) =>
 // ---------- State ----------
 const state = {
   step: 1,
+  preset: null, // 'log' | 'sust' | null (for highlight)
   inputs: {
     currency: '€',
     stage: 'Series A',            // Seed / Pre-A, Series A, Series B, Growth
@@ -100,14 +101,15 @@ function screenBasics(i){
       <h2>Presets (optional)</h2>
       <div class="grid2">
         <div>
-          <button class="btn" id="presetLog">Logistics — Efficient Growth</button>
+          <button class="btn preset ${state.preset==='log'?'on':''}" id="presetLog">Logistics — Efficient Growth</button>
           <p class="hint" style="margin-top:6px">ARR €5–10M, Growth 60–90%, NRR 115–125%, Burn ≤1.5×</p>
         </div>
         <div>
-          <button class="btn" id="presetSust">Sustainability — Premium Retention</button>
+          <button class="btn preset ${state.preset==='sust'?'on':''}" id="presetSust">Sustainability — Premium Retention</button>
           <p class="hint" style="margin-top:6px">ARR €3–8M, Growth 70–100%, NRR 120–130%, Burn ≤1.2×</p>
         </div>
       </div>
+      <div class="hint" style="margin-top:8px">Selecting a preset fills in Steps 2–3, but you stay on this page until you press Continue.</div>
     </section>
 
     <div class="rowbtn">
@@ -225,24 +227,29 @@ function bindNav(){
   const c3=$('continue3'); if(c3) c3.addEventListener('click', ()=>setStep(4));
   const b4=$('back4');     if(b4) b4.addEventListener('click', ()=>setStep(3));
 
-  const rs=$('restart');   if(rs) rs.addEventListener('click', ()=>{ state.step=1; render(); });
+  const rs=$('restart');   if(rs) rs.addEventListener('click', ()=>{ state.step=1; state.preset=null; render(); });
 
-  // Presets
+  // Presets — now *do not* auto-advance; they fill values + highlight and stay on Step 1
   const log=$('presetLog');
   if (log) log.addEventListener('click', ()=>{
     Object.assign(state.inputs,{
-      currency: state.inputs.currency, sector:'Logistics SaaS', stage:'Series A',
-      arr:7000000, growth:75, nrr:118, grossMargin:72, ebitMargin:-15, cacPayback:14, burnMultiple:1.4, customers:150
+      sector:'Logistics SaaS', stage: state.inputs.stage,
+      arr:7000000, growth:75, nrr:118,
+      grossMargin:72, ebitMargin:-15, cacPayback:14, burnMultiple:1.4, customers:150
     });
-    render(); setStep(2);
+    state.preset='log';
+    render(); // re-render to show highlight; user will click Continue
   });
+
   const sus=$('presetSust');
   if (sus) sus.addEventListener('click', ()=>{
     Object.assign(state.inputs,{
-      currency: state.inputs.currency, sector:'Sustainability SaaS', stage:'Series A',
-      arr:5000000, growth:90, nrr:125, grossMargin:78, ebitMargin:-10, cacPayback:12, burnMultiple:1.1, customers:90
+      sector:'Sustainability SaaS', stage: state.inputs.stage,
+      arr:5000000, growth:90, nrr:125,
+      grossMargin:78, ebitMargin:-10, cacPayback:12, burnMultiple:1.1, customers:90
     });
-    render(); setStep(2);
+    state.preset='sust';
+    render(); // re-render to show highlight; user will click Continue
   });
 
   // CSV
