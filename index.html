@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>SaaS Valuation — DN Capital (Logistics & Sustainability)</title>
+<title>SaaS Valuation — DN Capital</title>
 <style>
   :root{
     --bg:#0b1020; --bg2:#0e1530; --card:#111936;
@@ -35,31 +35,25 @@
   .big{font-size:22px}
   .good{color:var(--good)}
   .warn{color:var(--warn)}
-
-  /* Toggle groups */
   .group{display:flex;gap:8px;flex-wrap:wrap}
-  .chip{
-    padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.15);
-    background:#0b1228;color:#e9f0ff;cursor:pointer;user-select:none
-  }
+  .chip{padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.15);background:#0b1228;color:#e9f0ff;cursor:pointer;user-select:none}
   .chip.on{border-color:var(--good);background:#0e1736}
   .hint{font-size:12px;color:#9fb0d9;opacity:.9;margin-top:4px}
+  footer{color:#8fa6db;font-size:12px;margin:10px 0 26px;text-align:left}
 </style>
 </head>
 <body>
   <div class="wrap">
     <header>
-      <div class="title">DN Capital — SaaS Valuation Model</div>
-      <p class="subtitle">Four quick steps. Set <b>currency</b>, <b>industry</b>, and <b>stage</b> → enter metrics → tune adjustments → see your valuation & band.</p>
+      <div class="title">DN Capital — SaaS Valuation</div>
+      <p class="subtitle">Clean 4-step model. Step 1: currency, industry, stage, ARR → Step 2: growth & scale → Step 3: efficiency & model → Step 4: valuation & band.</p>
       <div class="stepper"><div id="s1" class="on"></div><div id="s2"></div><div id="s3"></div><div id="s4"></div></div>
     </header>
 
     <main id="app">Loading…</main>
 
-    <footer style="color:#8fa6db;font-size:12px;margin:10px 0 26px;text-align:left">
-      Client-side demo | Build: <span id="build"></span>
-    </footer>
+    <footer>Client-side demo | Build: <span id="build"></span></footer>
   </div>
-  <script defer src="./wizard.js?v=2"></script>
+  <script defer src="./wizard.js?v=1"></script>
 </body>
 </html>
