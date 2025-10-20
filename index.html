@@ -13,15 +13,15 @@
   body{margin:0;background:linear-gradient(180deg,var(--bg),var(--bg) 60%,var(--bg2));color:var(--text)}
   .wrap{max-width:980px;margin:0 auto;padding:22px}
   header{padding-top:16px;padding-bottom:8px;text-align:center}
-  .logo{display:block;margin:0 auto 10px;height:56px;object-fit:contain}
   .title{font-size:22px;font-weight:700;margin:8px 0 4px}
   .subtitle{margin:6px auto 12px;max-width:740px;color:#cfe0ff;font-size:14px;opacity:.95}
-  .stepper{display:flex;gap:8px;margin:12px auto 0;max-width:420px}
+  .stepper{display:flex;gap:8px;margin:12px auto 0;max-width:460px}
   .stepper div{flex:1;height:8px;border-radius:999px;background:rgba(255,255,255,.08)}
   .stepper .on{background:var(--good)}
   .card{background:var(--card);border:1px solid rgba(255,255,255,.1);border-radius:18px;padding:16px;box-shadow:0 8px 24px rgba(0,0,0,.25);margin-bottom:16px}
   .card h2{margin:0 0 10px;font-size:16px}
   label{display:block;font-size:12px;margin:8px 0 6px;color:#c8d8ff}
+  input, select, button.btn{font-size:14px}
   input, select{width:100%;padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.15);background:#0b1228;color:var(--text);outline:none}
   input:focus, select:focus{border-color:var(--accent)}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
@@ -35,23 +35,31 @@
   .big{font-size:22px}
   .good{color:var(--good)}
   .warn{color:var(--warn)}
-  footer{color:#8fa6db;font-size:12px;margin:10px 0 26px;text-align:left}
+
+  /* Toggle groups */
+  .group{display:flex;gap:8px;flex-wrap:wrap}
+  .chip{
+    padding:10px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.15);
+    background:#0b1228;color:#e9f0ff;cursor:pointer;user-select:none
+  }
+  .chip.on{border-color:var(--good);background:#0e1736}
+  .hint{font-size:12px;color:#9fb0d9;opacity:.9;margin-top:4px}
 </style>
 </head>
 <body>
   <div class="wrap">
     <header>
-      <!-- Optional: drop a DN logo next to this file and change src to ./dn-logo.png -->
       <div class="title">DN Capital — SaaS Valuation Model</div>
-      <p class="subtitle">Fast, defensible valuation bands for <b>Logistics Tech</b> and <b>Sustainability SaaS</b>. Step 1: inputs. Step 2: adjust drivers. Step 3: valuation & banding.</p>
-      <div class="stepper"><div id="s1" class="on"></div><div id="s2"></div><div id="s3"></div></div>
+      <p class="subtitle">Four quick steps. Set <b>currency</b>, <b>industry</b>, and <b>stage</b> → enter metrics → tune adjustments → see your valuation & band.</p>
+      <div class="stepper"><div id="s1" class="on"></div><div id="s2"></div><div id="s3"></div><div id="s4"></div></div>
     </header>
 
     <main id="app">Loading…</main>
 
-    <footer>Client-side demo | Build: <span id="build"></span></footer>
+    <footer style="color:#8fa6db;font-size:12px;margin:10px 0 26px;text-align:left">
+      Client-side demo | Build: <span id="build"></span>
+    </footer>
   </div>
-
-  <script defer src="./wizard.js?v=1"></script>
+  <script defer src="./wizard.js?v=2"></script>
 </body>
 </html>
