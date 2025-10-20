@@ -291,5 +291,3 @@ function render(){
   wireChips();
 }
 
-// Init
-window.addEventListener('DOMContentLoaded', render);
