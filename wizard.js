@@ -8,28 +8,45 @@ const chip = (id, val, current) =>
   `<span class="chip ${val===current?'on':''}" data-id="${id}" data-val="${val}">${val}</span>`;
 const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
 const fmt = (n, cur='€') => cur + Number(n||0).toLocaleString(undefined,{maximumFractionDigits:0});
+const toNum = (v)=> Number.isFinite(+v) ? +v : 0;
 
 // ---------- State ----------
 const state = {
   step: 1,
   inputs: {
-    // Step 1
+    // Step 1 — Basics
     currency:'€',
     sector:'Logistics SaaS', // or Sustainability SaaS / Other
     stage:'Series A',        // Seed / Pre-A, Series A, Series B, Growth
     arr: 5000000,
 
-    // Step 2
+    // Step 2 — Growth & Scale
     arrGrowth: 80,           // %
     customers: 120,
     customerGrowth: 60,      // %
 
-    // Step 3
+    // Step 3 — Efficiency & CAC payback
     grossMargin: 75,         // %
     ebitMargin: -20,         // %
-    cacPayback: 14,          // months
     burnMultiple: 1.6,       // x
-    model: 'Model A — Stage & Efficiency Adjusted'
+
+    // ARPA input mode
+    arpaMode: 'direct',      // 'direct' | 'acv' | 'seats'
+    // Direct
+    arpaMonthly: 500,        // €/$ per account per month
+    // From ACV
+    acvAnnual: 6000,         // annual contract value
+    // From seats × price
+    seats: 20,
+    pricePerSeatMonthly: 50,
+
+    // CAC & payback
+    cacPerCustomer: 6000,    // acquisition cost per new logo
+    onboardingLag: 1,        // months before revenue starts
+
+    // Manual override (optional)
+    cacPaybackManualMode: false,
+    cacPaybackManual: 14
   }
 };
 
@@ -52,51 +69,49 @@ const ruleOf40 = (g,p)=> Number(g||0) + Number(p||0);
 function ruleOf40Adj(r40){ if(r40>=40) return 0.20; if(r40>=20) return 0.10; if(r40<0) return -0.10; return 0; }
 function burnAdj(b){ if(b<=1.0) return 0.15; if(b<=1.5) return 0.10; if(b<=2.0) return 0.00; if(b<=3.0) return -0.10; return -0.20; }
 
-function growthOnlyMultiple(g){ // simple growth bands for Model B
-  if (g>=120) return 16;
-  if (g>=100) return 14;
-  if (g>=80)  return 12;
-  if (g>=60)  return 10;
-  if (g>=40)  return 8;
-  if (g>=20)  return 6;
-  return 4;
+// --- ARPA (monthly) effective value from chosen mode ---
+function effectiveARPA(i){
+  if (i.arpaMode === 'acv'){
+    return Math.max(0, toNum(i.acvAnnual) / 12);
+  }
+  if (i.arpaMode === 'seats'){
+    return Math.max(0, toNum(i.seats) * toNum(i.pricePerSeatMonthly));
+  }
+  // direct
+  return Math.max(0, toNum(i.arpaMonthly));
 }
 
+// --- CAC Payback computed from inputs ---
+function computeCacPaybackMonths(i){
+  const gm = clamp(toNum(i.grossMargin)/100, 0, 1);
+  const arpa = effectiveARPA(i);
+  const cac  = Math.max(0, toNum(i.cacPerCustomer));
+  const lag  = Math.max(0, toNum(i.onboardingLag));
+  if (gm <= 0 || arpa <= 0) return lag; // avoid divide by zero; show at least lag
+  const grossProfitPerMonth = arpa * gm; // contribution margin per customer per month
+  return (cac / grossProfitPerMonth) + lag;
+}
+const effectiveCacPayback = (i)=> i.cacPaybackManualMode ? toNum(i.cacPaybackManual) : computeCacPaybackMonths(i);
+
+// --- Main valuation compute (Model A only) ---
 function compute(i){
-  const sec = sectorPremium(i.sector);
+  const base = baseMultipleForStage(i.stage);
+  const sec  = sectorPremium(i.sector);
+  const r40  = ruleOf40(i.arrGrowth, i.ebitMargin);
+  const mult = base * (1+sec) * (1+ruleOf40Adj(r40)) * (1+burnAdj(i.burnMultiple));
+  const adj  = clamp(mult, base*0.6, base*1.8);
 
-  if (i.model.startsWith('Model A')) {
-    // Stage & Efficiency Adjusted
-    const base = baseMultipleForStage(i.stage);
-    const r40  = ruleOf40(i.arrGrowth, i.ebitMargin);
-    const mult = base * (1+sec) * (1+ruleOf40Adj(r40)) * (1+burnAdj(i.burnMultiple));
-    const adj  = clamp(mult, base*0.6, base*1.8);
-
-    const val  = i.arr * adj;
-    return {
-      model:'A',
-      baseMultiple: base,
-      adjMultiple: adj,
-      impliedVal: val,
-      lowMultiple: adj*0.85, highMultiple: adj*1.15,
-      lowVal: i.arr*adj*0.85, highVal: i.arr*adj*1.15,
-      r40
-    };
-  } else {
-    // Model B — Growth Only
-    const base = growthOnlyMultiple(i.arrGrowth);
-    const adj  = base * (1+sec); // apply sector premium only
-    const val  = i.arr * adj;
-    return {
-      model:'B',
-      baseMultiple: base,
-      adjMultiple: adj,
-      impliedVal: val,
-      lowMultiple: adj*0.85, highMultiple: adj*1.15,
-      lowVal: i.arr*adj*0.85, highVal: i.arr*adj*1.15,
-      r40: ruleOf40(i.arrGrowth, i.ebitMargin)
-    };
-  }
+  const val  = i.arr * adj;
+  return {
+    baseMultiple: base,
+    adjMultiple: adj,
+    impliedVal: val,
+    lowMultiple: adj*0.85, highMultiple: adj*1.15,
+    lowVal: i.arr*adj*0.85, highVal: i.arr*adj*1.15,
+    r40,
+    arpaEff: effectiveARPA(i),
+    payback: effectiveCacPayback(i)
+  };
 }
 
 // ---------- Screens ----------
@@ -148,7 +163,7 @@ function screen2(i){
         <div><label>Customers</label><input id="customers" type="number" step="1" value="${i.customers}"></div>
         <div><label>Customer Growth % (YoY)</label><input id="customerGrowth" type="number" step="1" value="${i.customerGrowth}"></div>
       </div>
-      <div class="hint" style="margin-top:6px">Growth is a key multiple driver. Model B uses growth almost exclusively.</div>
+      <div class="hint" style="margin-top:6px">Growth is a key multiple driver (also shows up in Rule of 40).</div>
     </section>
     <div class="rowbtn">
       <button class="btn" id="back2">Back</button>
@@ -157,30 +172,73 @@ function screen2(i){
 }
 
 function screen3(i){
+  const arpaEff = effectiveARPA(i).toFixed(0);
+  const computedPayback = computeCacPaybackMonths(i).toFixed(1);
   return `
     <section class="card">
-      <h2>Step 3 — Efficiency & Model</h2>
+      <h2>Step 3 — Efficiency & CAC Payback</h2>
+
       <div class="grid3">
         <div><label>Gross Margin %</label><input id="grossMargin" type="number" step="1" value="${i.grossMargin}"></div>
         <div><label>EBIT Margin %</label><input id="ebitMargin" type="number" step="1" value="${i.ebitMargin}"></div>
-        <div><label>CAC Payback (months)</label><input id="cacPayback" type="number" step="1" value="${i.cacPayback}"></div>
-      </div>
-      <div class="grid3" style="margin-top:6px">
         <div><label>Burn Multiple (x)</label><input id="burnMultiple" type="number" step="0.1" value="${i.burnMultiple}"></div>
+      </div>
+
+      <div class="grid3" style="margin-top:10px">
         <div>
-          <label>Valuation Model</label>
-          <select id="model">
-            <option ${i.model.startsWith('Model A')?'selected':''}>Model A — Stage & Efficiency Adjusted</option>
-            <option ${i.model.startsWith('Model B')?'selected':''}>Model B — Growth-Only Multiple</option>
+          <label>ARPA Input Mode</label>
+          <select id="arpaMode">
+            <option value="direct" ${i.arpaMode==='direct'?'selected':''}>Direct (enter ARPA monthly)</option>
+            <option value="acv" ${i.arpaMode==='acv'?'selected':''}>From ACV (ACV / 12)</option>
+            <option value="seats" ${i.arpaMode==='seats'?'selected':''}>From seats × price</option>
           </select>
         </div>
-        <div></div>
+        <div></div><div></div>
       </div>
-      <div class="hint" style="margin-top:6px">
-        Model A: base multiple by stage, adjusted by sector premium, Rule of 40, and burn efficiency.<br/>
-        Model B: growth band → multiple, plus sector premium (simple, growth-centric).
+
+      ${
+        i.arpaMode==='direct'
+        ? `
+        <div class="grid3" style="margin-top:8px">
+          <div><label>ARPA (monthly)</label><input id="arpaMonthly" type="number" step="10" value="${i.arpaMonthly}"></div>
+          <div><label>Effective ARPA (monthly)</label><input value="${arpaEff}" disabled></div>
+          <div></div>
+        </div>`
+        : i.arpaMode==='acv'
+        ? `
+        <div class="grid3" style="margin-top:8px">
+          <div><label>ACV (annual)</label><input id="acvAnnual" type="number" step="100" value="${i.acvAnnual}"></div>
+          <div><label>Effective ARPA = ACV / 12</label><input value="${arpaEff}" disabled></div>
+          <div></div>
+        </div>`
+        : `
+        <div class="grid3" style="margin-top:8px">
+          <div><label>Seats</label><input id="seats" type="number" step="1" value="${i.seats}"></div>
+          <div><label>Price per seat (monthly)</label><input id="pricePerSeatMonthly" type="number" step="1" value="${i.pricePerSeatMonthly}"></div>
+          <div><label>Effective ARPA = Seats × Price</label><input value="${arpaEff}" disabled></div>
+        </div>`
+      }
+
+      <div class="grid3" style="margin-top:10px">
+        <div><label>CAC per Customer</label><input id="cacPerCustomer" type="number" step="50" value="${i.cacPerCustomer}"></div>
+        <div><label>Onboarding Lag (months)</label><input id="onboardingLag" type="number" step="1" value="${i.onboardingLag}"></div>
+        <div>
+          <label>Computed CAC Payback (months)</label>
+          <input value="${computedPayback}" disabled>
+          <div class="hint">= CAC / (Effective ARPA × GrossMargin) + Lag</div>
+        </div>
+      </div>
+
+      <div class="grid3" style="margin-top:8px">
+        <div>
+          <label><input id="cacPaybackManualMode" type="checkbox" ${i.cacPaybackManualMode?'checked':''}> Use manual payback</label>
+          <input id="cacPaybackManual" type="number" step="0.5" value="${i.cacPaybackManual}" ${i.cacPaybackManualMode?'':'disabled'}>
+          <div class="hint">Tick to override computed payback with a known figure.</div>
+        </div>
+        <div></div><div></div>
       </div>
     </section>
+
     <div class="rowbtn">
       <button class="btn" id="back3">Back</button>
       <button class="btn" id="continue3">See Valuation</button>
@@ -189,13 +247,11 @@ function screen3(i){
 
 function screen4(i){
   const o = compute(i);
-  const nrrBand = (i.customerGrowth>=80 || i.arrGrowth>=80) ? 'High growth context' : (i.customerGrowth>=40 ? 'Healthy growth' : 'Moderate');
   const r40Class = o.r40>=40?'good':(o.r40<0?'warn':'');
   return `
     <section class="card">
       <h2>Step 4 — Valuation</h2>
-      <div class="kpi"><div class="lab">Model</div><div class="val">${i.model}</div></div>
-      <div class="kpi"><div class="lab">Base Multiple</div><div class="val">${o.baseMultiple.toFixed(1)}×</div></div>
+      <div class="kpi"><div class="lab">Base ARR Multiple (${i.stage})</div><div class="val">${o.baseMultiple.toFixed(1)}×</div></div>
       <div class="kpi"><div class="lab">Adjusted Multiple</div><div class="val big good">${o.adjMultiple.toFixed(2)}×</div></div>
       <div class="kpi"><div class="lab">Implied Valuation</div><div class="val big">${fmt(o.impliedVal, i.currency)}</div></div>
       <div class="kpi"><div class="lab">Valuation Band</div><div class="val">${o.lowMultiple.toFixed(1)}× – ${o.highMultiple.toFixed(1)}×</div></div>
@@ -205,12 +261,12 @@ function screen4(i){
     <section class="card">
       <h2>Health Snapshot</h2>
       <div class="kpi"><div class="lab">Rule of 40 (ARR Growth + EBIT Margin)</div><div class="val ${r40Class}">${o.r40.toFixed(0)}%</div></div>
-      <div class="kpi"><div class="lab">Customers</div><div class="val">${i.customers.toLocaleString()}</div></div>
-      <div class="kpi"><div class="lab">Customer Growth</div><div class="val">${i.customerGrowth}% <span class="muted">(${nrrBand})</span></div></div>
-      <div class="kpi"><div class="lab">Burn Multiple</div><div class="val">${i.burnMultiple.toFixed(1)}×</div></div>
-      <div class="kpi"><div class="lab">Gross Margin</div><div class="val">${i.grossMargin}%</div></div>
-      <div class="kpi"><div class="lab">EBIT Margin</div><div class="val">${i.ebitMargin}%</div></div>
-      <div class="kpi"><div class="lab">CAC Payback</div><div class="val">${i.cacPayback} mo</div></div>
+      <div class="kpi"><div class="lab">Effective ARPA (monthly)</div><div class="val">${fmt(o.arpaEff, i.currency)}</div></div>
+      <div class="kpi"><div class="lab">Computed CAC Payback</div><div class="val">${o.payback.toFixed(1)} mo ${state.inputs.cacPaybackManualMode?'(manual override)':''}</div></div>
+      <div class="kpi"><div class="lab">Gross Margin</div><div class="val">${state.inputs.grossMargin}%</div></div>
+      <div class="kpi"><div class="lab">Burn Multiple</div><div class="val">${state.inputs.burnMultiple.toFixed(1)}×</div></div>
+      <div class="kpi"><div class="lab">Customers</div><div class="val">${state.inputs.customers.toLocaleString()}</div></div>
+      <div class="kpi"><div class="lab">ARR Growth</div><div class="val">${state.inputs.arrGrowth}%</div></div>
     </section>
 
     <div class="rowbtn">
@@ -238,8 +294,19 @@ function bindInputs(){
   document.querySelectorAll('input,select').forEach(el=>{
     el.addEventListener('input', e=>{
       const id=e.target.id;
-      const val=(e.target.type==='number') ? +e.target.value : e.target.value;
+      let val=(e.target.type==='number') ? +e.target.value : e.target.value;
+      if (e.target.type === 'checkbox') val = e.target.checked;
+
       if (id in state.inputs) state.inputs[id]=val;
+
+      // special: toggling manual payback enables/disables the number input
+      if (id==='cacPaybackManualMode'){
+        const manualBox = document.getElementById('cacPaybackManual');
+        if (manualBox) manualBox.disabled = !e.target.checked;
+      }
+
+      // if ARPA mode changes, re-render to show the relevant fields
+      if (id==='arpaMode'){ render(); }
     });
   });
 }
@@ -260,8 +327,12 @@ function bindNav(){
       ['Field','Value'],
       ['Currency',i.currency],['Sector',i.sector],['Stage',i.stage],['ARR',i.arr],
       ['ARR Growth %',i.arrGrowth],['Customers',i.customers],['Customer Growth %',i.customerGrowth],
-      ['Gross Margin %',i.grossMargin],['EBIT Margin %',i.ebitMargin],['CAC Payback (months)',i.cacPayback],['Burn Multiple',i.burnMultiple],
-      ['Model',i.model],['Base Multiple',o.baseMultiple.toFixed(2)],['Adjusted Multiple',o.adjMultiple.toFixed(2)],
+      ['Gross Margin %',i.grossMargin],['EBIT Margin %',i.ebitMargin],
+      ['ARPA Mode',i.arpaMode],['ARPA Monthly (effective)',Math.round(o.arpaEff)],
+      ['ACV Annual',i.acvAnnual],['Seats',i.seats],['Price/Seat Monthly',i.pricePerSeatMonthly],
+      ['CAC per Customer',i.cacPerCustomer],['Onboarding Lag (mo)',i.onboardingLag],
+      ['CAC Payback (mo)',o.payback.toFixed(1)],['Burn Multiple',i.burnMultiple],
+      ['Base Multiple',o.baseMultiple.toFixed(2)],['Adjusted Multiple',o.adjMultiple.toFixed(2)],
       ['Implied Valuation',Math.round(o.impliedVal)],['Low Valuation',Math.round(o.lowVal)],['High Valuation',Math.round(o.highVal)],
       ['Rule of 40',Math.round(o.r40)]
     ];
