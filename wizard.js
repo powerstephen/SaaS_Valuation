@@ -1,201 +1,239 @@
 // ---------- Build stamp ----------
 const $ = (id) => document.getElementById(id);
-const safeSet = (id, val) => { const el = $(id); if (el) el.textContent = val; };
-safeSet('build', new Date().toISOString());
+const setTxt = (id, v) => { const el = $(id); if (el) el.textContent = v; };
+setTxt('build', new Date().toISOString());
 
-// ---------- Theme helpers (optional: tweak brand colors here) ----------
-(function applyTheme(vars){
-  const r = document.documentElement;
-  Object.entries(vars).forEach(([k,v]) => r.style.setProperty(`--${k}`, v));
-})({
-  // Set these to match your logo palette if you like
-  // bg:'#0b1020', bg2:'#0e1530', card:'#111936', accent:'#66a3ff', good:'#19c37d'
-});
+// ---------- Helpers ----------
+const fmt = (n, cur='€') => cur + Number(n||0).toLocaleString(undefined,{maximumFractionDigits:0});
+const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
 
-// ---------- Math helpers ----------
-const fmt = (v, cur) => (cur || '$') + Number(v).toLocaleString(undefined,{maximumFractionDigits:0});
-const throughputToAHTReduction = (pct) => {
-  const f = 1 + (pct/100);
-  return f > 0 ? (1 - (1/f)) * 100 : 0;
-};
-
-// ---------- State ----------
+// ---------- State (defaults tuned to Series A/B) ----------
 const state = {
   step: 1,
   inputs: {
-    agents: 25,
-    agentCostYear: 60000,
-    ticketsPerMonth: 30000,
-    aht: 7,
-    hoursYear: 2080,
-    currency: '$',
-    ahtReductionPct: 12,
-    qaHoursBaseline: 6,
-    qaAutomationPct: 70,
-    managerHoursSaved: 1.5,
-
-    // CSAT → Revenue protection
-    annualRevenueAtRisk: 500000,
-    csatUpliftPct: 0,
-    revenueProtected: 0   // leave 0 to auto-calc from csatUpliftPct * annualRevenueAtRisk
+    currency: '€',
+    stage: 'Series A',          // Seed/Pre-A, Series A, Series B, Growth
+    sector: 'Logistics SaaS',   // Logistics SaaS, Sustainability SaaS, Other
+    arr: 5000000,               // Annual Recurring Revenue
+    growth: 80,                 // YoY growth %
+    nrr: 115,                   // Net Revenue Retention %
+    grossMargin: 75,            // %
+    ebitMargin: -20,            // %
+    cacPayback: 14,             // months
+    burnMultiple: 1.6,          // Net Burn / Net New ARR
+    customers: 120              // count (contextual)
+  },
+  levers: {
+    sectorPremiumPct: 0,        // auto-set from sector
+    ruleOf40AdjPct: 0,          // auto-set from Rule of 40
+    burnAdjPct: 0,              // auto-set from burn multiple
+    qualityAdjPct: 0,           // manual extra (+/-)
   }
 };
 
-const computeRevenueProtected = (i) =>
-  (i.annualRevenueAtRisk || 0) * (i.csatUpliftPct || 0) / 100;
+// ---------- Core scoring / multiples ----------
+function baseMultipleForStage(stage){
+  switch(stage){
+    case 'Seed / Pre-A': return 7;        // mid of 5–8×
+    case 'Series A':     return 10;       // mid of 8–12×
+    case 'Series B':     return 12.5;     // mid of 10–15×
+    case 'Growth':       return 8;        // mid of 6–10×
+    default:             return 9;
+  }
+}
 
-function compute(i){
-  const hourlyCost = i.agentCostYear / i.hoursYear;
+function sectorPremium(sector){
+  if (sector === 'Sustainability SaaS') return 0.18; // +18%
+  if (sector === 'Logistics SaaS')      return 0.12; // +12%
+  return 0.00;
+}
 
-  const revenueProtectedAuto = computeRevenueProtected(i);
-  const revenueProtected = (i.revenueProtected && i.revenueProtected > 0)
-    ? i.revenueProtected
-    : revenueProtectedAuto;
+function ruleOf40(growth, ebitMargin){
+  return Number(growth||0) + Number(ebitMargin||0);
+}
 
-  // AHT savings
-  const minutesSavedPerTicket = i.aht * (i.ahtReductionPct/100);
-  const hoursSavedPerMonth = (i.ticketsPerMonth * minutesSavedPerTicket) / 60;
-  const ahtSavings = hoursSavedPerMonth * 12 * hourlyCost;
+function ruleOf40Adj(r40){
+  if (r40 >= 40) return 0.20;  // +20%
+  if (r40 >= 20) return 0.10;  // +10%
+  if (r40 < 0)   return -0.10; // -10%
+  return 0.00;
+}
 
-  // QA automation savings
-  const qaHoursSavedPerAgentYear = i.qaHoursBaseline * (i.qaAutomationPct/100) * 12;
-  const qaSavings = qaHoursSavedPerAgentYear * i.agents * hourlyCost;
+function burnAdj(burnMultiple){
+  if (burnMultiple <= 1.0) return 0.15;     // +15% (excellent efficiency)
+  if (burnMultiple <= 1.5) return 0.10;     // +10%
+  if (burnMultiple <= 2.0) return 0.00;
+  if (burnMultiple <= 3.0) return -0.10;
+  return -0.20;
+}
 
-  // Manager time savings
-  const mgrSavings = i.managerHoursSaved * 12 * i.agents * hourlyCost;
+function qualityBand(nrr, gm, payback){
+  // Simple health descriptors for context in UI
+  const nrrBand = (nrr>=120)?'Excellent':(nrr>=110)?'Strong':(nrr>=100)?'OK':'At-risk';
+  const gmBand  = (gm>=80)?'Elite':(gm>=70)?'Healthy':(gm>=60)?'OK':'Thin';
+  const pbBand  = (payback<=12)?'Fast':(payback<=18)?'Reasonable':'Slow';
+  return {nrrBand, gmBand, pbBand};
+}
 
-  const total = ahtSavings + qaSavings + mgrSavings + revenueProtected;
-  return {hourlyCost,ahtSavings,qaSavings,mgrSavings,revenueProtected,total};
+// ---------- Compute valuation ----------
+function compute(i, l){
+  const base = baseMultipleForStage(i.stage);
+
+  // Auto-dials
+  const sec = sectorPremium(i.sector);                 l.sectorPremiumPct = sec*100;
+  const r40 = ruleOf40(i.growth, i.ebitMargin);        l.ruleOf40AdjPct   = ruleOf40Adj(r40)*100;
+  const bAdj= burnAdj(i.burnMultiple);                 l.burnAdjPct       = bAdj*100;
+
+  // Manual quality adj (entered as +/- % in UI, but stored here as fraction)
+  const manual = clamp(Number(l.qualityAdjPct||0), -30, 30)/100;
+
+  // Combined multiple
+  const multiplier =
+    base *
+    (1 + sec) *
+    (1 + ruleOf40Adj(r40)) *
+    (1 + bAdj) *
+    (1 + manual);
+
+  // Guardrails
+  const minMult = base * 0.6;
+  const maxMult = base * 1.8;
+  const adjMult = clamp(multiplier, minMult, maxMult);
+
+  const impliedVal = i.arr * adjMult;
+
+  // Bands (±15% around adj multiple)
+  const lowMult  = adjMult * 0.85;
+  const highMult = adjMult * 1.15;
+
+  return {
+    baseMultiple: base,
+    adjMultiple: adjMult,
+    lowMultiple: lowMult,
+    highMultiple: highMult,
+    impliedVal,
+    lowVal:  i.arr * lowMult,
+    highVal: i.arr * highMult,
+    r40,
+    bands: qualityBand(i.nrr, i.grossMargin, i.cacPayback)
+  };
 }
 
 // ---------- Views ----------
 function screenInputs(i){
   return `
-    <div class="grid2">
-      <section class="card">
-        <h2>Team & Cost Assumptions</h2>
-        <div class="grid2">
-          <div><label>Number of agents</label><input id="agents" type="number" min="1" value="${i.agents}"></div>
-          <div><label>Fully-loaded cost per agent / year (USD)</label><input id="agentCostYear" type="number" min="0" step="500" value="${i.agentCostYear}"></div>
-        </div>
-        <div class="grid2">
-          <div><label>Tickets per month (total)</label><input id="ticketsPerMonth" type="number" min="0" step="100" value="${i.ticketsPerMonth}"></div>
-          <div><label>Baseline AHT (minutes)</label><input id="aht" type="number" min="0" step="0.1" value="${i.aht}"></div>
-        </div>
-        <div class="grid2">
-          <div><label>Work hours per agent / year</label><input id="hoursYear" type="number" min="1" step="10" value="${i.hoursYear}"></div>
-          <div><label>Currency symbol</label><input id="currency" type="text" value="${i.currency}"></div>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>Expected Kaizo Impact</h2>
-        <div class="grid2">
-          <div><label>AHT reduction (%) via coaching insights</label><input id="ahtReductionPct" type="number" min="0" max="100" step="1" value="${i.ahtReductionPct}"></div>
-          <div><label>QA hours per agent / month (baseline manual)</label><input id="qaHoursBaseline" type="number" min="0" step="0.5" value="${i.qaHoursBaseline}"></div>
-        </div>
-        <div class="grid2">
-          <div><label>QA automation coverage with Kaizo (%)</label><input id="qaAutomationPct" type="number" min="0" max="100" step="1" value="${i.qaAutomationPct}"></div>
-          <div><label>Manager coaching hours saved / agent / month</label><input id="managerHoursSaved" type="number" min="0" step="0.1" value="${i.managerHoursSaved}"></div>
-        </div>
-      </section>
-    </div>
-
     <section class="card">
-      <h2>CSAT → Revenue Protection</h2>
-      <div class="grid2">
-        <div><label>Annual revenue at risk (USD)</label><input id="annualRevenueAtRisk" type="number" min="0" step="1000" value="${i.annualRevenueAtRisk}"></div>
-        <div><label>CSAT uplift (%)</label><input id="csatUpliftPct" type="number" min="0" max="100" step="1" value="${i.csatUpliftPct}"></div>
+      <h2>Company Profile</h2>
+      <div class="grid3">
+        <div><label>Currency symbol</label><input id="currency" value="${i.currency}" maxlength="3"></div>
+        <div>
+          <label>Stage</label>
+          <select id="stage">
+            <option ${i.stage==='Seed / Pre-A'?'selected':''}>Seed / Pre-A</option>
+            <option ${i.stage==='Series A'?'selected':''}>Series A</option>
+            <option ${i.stage==='Series B'?'selected':''}>Series B</option>
+            <option ${i.stage==='Growth'?'selected':''}>Growth</option>
+          </select>
+        </div>
+        <div>
+          <label>Sector</label>
+          <select id="sector">
+            <option ${i.sector==='Logistics SaaS'?'selected':''}>Logistics SaaS</option>
+            <option ${i.sector==='Sustainability SaaS'?'selected':''}>Sustainability SaaS</option>
+            <option ${i.sector==='Other'?'selected':''}>Other</option>
+          </select>
+        </div>
       </div>
-      <div class="grid2">
-        <div><label>Revenue protected (auto from CSAT) — you can override</label><input id="revenueProtected" type="number" min="0" step="1000" value="${i.revenueProtected || 0}"></div>
-        <div><div class="muted" style="margin-top:34px">Tip: leave at 0 to auto-calc from the two fields on the left.</div></div>
+      <div class="grid3" style="margin-top:6px">
+        <div><label>ARR</label><input id="arr" type="number" min="0" step="50000" value="${i.arr}"></div>
+        <div><label>YoY Growth %</label><input id="growth" type="number" step="1" value="${i.growth}"></div>
+        <div><label>NRR %</label><input id="nrr" type="number" step="1" value="${i.nrr}"></div>
+      </div>
+      <div class="grid3" style="margin-top:6px">
+        <div><label>Gross Margin %</label><input id="grossMargin" type="number" step="1" value="${i.grossMargin}"></div>
+        <div><label>EBIT Margin %</label><input id="ebitMargin" type="number" step="1" value="${i.ebitMargin}"></div>
+        <div><label>CAC Payback (months)</label><input id="cacPayback" type="number" step="1" value="${i.cacPayback}"></div>
+      </div>
+      <div class="grid3" style="margin-top:6px">
+        <div><label>Burn Multiple</label><input id="burnMultiple" type="number" step="0.1" value="${i.burnMultiple}"></div>
+        <div><label>Customers (context)</label><input id="customers" type="number" step="1" value="${i.customers}"></div>
+        <div></div>
       </div>
     </section>
-
     <div class="rowbtn">
       <span></span>
       <button class="btn" id="continue1">Continue</button>
-    </div>`;
+    </div>
+  `;
 }
 
-function screenScenarios(i){
-  const effAhtFrom50 = throughputToAHTReduction(50); // ~33.3%
+function screenLevers(i, l){
+  // Show auto-adjustments + allow manual tweak
   return `
     <section class="card">
-      <h2>Case-Study Presets</h2>
-      <div class="presets">
-        <div class="preset">
-          <h3>Foot Locker</h3>
-          <div class="badge">Resolution Time ↓ 75%</div>
-          <div class="muted">Apply a high AHT reduction to mimic large handling-time gains.</div>
-          <button class="btn" id="presetFoot">Apply</button>
+      <h2>Adjustments & Presets</h2>
+      <div class="grid2">
+        <div>
+          <label>Sector Premium (auto)</label>
+          <input id="sectorPremiumPct" type="number" step="1" value="${l.sectorPremiumPct}" disabled>
         </div>
-        <div class="preset">
-          <h3>Trading 212</h3>
-          <div class="badge">CSAT ↑ 93%</div>
-          <div class="muted">Use CSAT uplift to auto-calc revenue protected from churn/retention.</div>
-          <button class="btn" id="presetT212">Apply</button>
-        </div>
-        <div class="preset">
-          <h3>Gaming1</h3>
-          <div class="badge">Ticket Processing ↑ 50%</div>
-          <div class="muted">Convert throughput gains into effective AHT reduction (~${effAhtFrom50.toFixed(1)}%).</div>
-          <button class="btn" id="presetG1">Apply</button>
+        <div>
+          <label>Rule of 40 Adjustment (auto)</label>
+          <input id="ruleOf40AdjPct" type="number" step="1" value="${l.ruleOf40AdjPct}" disabled>
         </div>
       </div>
-    </section>
+      <div class="grid2" style="margin-top:6px">
+        <div>
+          <label>Burn Efficiency Adjustment (auto)</label>
+          <input id="burnAdjPct" type="number" step="1" value="${l.burnAdjPct}" disabled>
+        </div>
+        <div>
+          <label>Manual Quality Adjustment (+/- %)</label>
+          <input id="qualityAdjPct" type="number" step="1" value="${l.qualityAdjPct}">
+        </div>
+      </div>
 
-    <section class="card">
-      <h2>Tune Scenario</h2>
-      <div class="grid2">
-        <div><label>AHT reduction (%)</label><input id="s_ahtReductionPct" type="number" min="0" max="100" step="1" value="${i.ahtReductionPct}"></div>
-        <div><label>QA automation (%)</label><input id="s_qaAutomationPct" type="number" min="0" max="100" step="1" value="${i.qaAutomationPct}"></div>
-      </div>
-      <div class="grid2">
-        <div><label>Manager hours saved / agent / month</label><input id="s_managerHoursSaved" type="number" min="0" step="0.1" value="${i.managerHoursSaved}"></div>
-        <div><label>CSAT uplift (%)</label><input id="s_csatUpliftPct" type="number" min="0" max="100" step="1" value="${i.csatUpliftPct}"></div>
-      </div>
-      <div class="grid2">
-        <div><label>Annual revenue at risk (USD)</label><input id="s_annualRevenueAtRisk" type="number" min="0" step="1000" value="${i.annualRevenueAtRisk}"></div>
-        <div><label>Revenue protected (override)</label><input id="s_revenueProtected" type="number" min="0" step="1000" value="${i.revenueProtected || 0}"></div>
+      <div class="card" style="margin-top:12px">
+        <h2>Presets</h2>
+        <div class="grid2">
+          <div>
+            <button class="btn" id="presetLog">Logistics — Efficient Growth</button>
+            <p class="subtitle" style="margin:6px 0 0;opacity:.8">ARR €5–10M, Growth 60–90%, NRR 115–125%, Burn ≤1.5×</p>
+          </div>
+          <div>
+            <button class="btn" id="presetSust">Sustainability — Premium Retention</button>
+            <p class="subtitle" style="margin:6px 0 0;opacity:.8">ARR €3–8M, Growth 70–100%, NRR 120–130%, Burn ≤1.2×</p>
+          </div>
+        </div>
       </div>
     </section>
 
     <div class="rowbtn">
       <button class="btn" id="back2">Back</button>
       <button class="btn" id="continue2">Continue</button>
-    </div>`;
+    </div>
+  `;
 }
 
-function screenResults(i){
-  const o = compute(i);
-
-  // IMPORTANT: if your image is next to index.html, keep "./results-hero.png"
-  // If you use /app + rewrites, change to "/results-hero.png"
-  const resultsImageSrc = "./results-hero.png?v=1";
-
+function screenResults(i, l){
+  const o = compute(i, l);
   return `
     <section class="card">
-      <h2>Annual Impact (Estimated)</h2>
-      <div class="kpi"><div class="lab">Labor savings from faster handling (AHT)</div><div class="val">${fmt(o.ahtSavings,i.currency)}</div></div>
-      <div class="kpi"><div class="lab">Labor savings from QA automation</div><div class="val">${fmt(o.qaSavings,i.currency)}</div></div>
-      <div class="kpi"><div class="lab">Manager time savings</div><div class="val">${fmt(o.mgrSavings,i.currency)}</div></div>
-      <div class="kpi"><div class="lab">Revenue protected (CSAT uplift)</div><div class="val">${fmt(o.revenueProtected,i.currency)}</div></div>
-      <div class="kpi"><div class="lab"><span class="big">Total Annual Impact</span></div><div class="val big good">${fmt(o.total,i.currency)}</div></div>
-      <div class="muted">All figures are directional estimates for planning. Adjust inputs to fit your environment.</div>
+      <h2>Valuation</h2>
+      <div class="kpi"><div class="lab">Base ARR Multiple (${i.stage})</div><div class="val">${o.baseMultiple.toFixed(1)}×</div></div>
+      <div class="kpi"><div class="lab">Adjusted Multiple</div><div class="val big good">${o.adjMultiple.toFixed(2)}×</div></div>
+      <div class="kpi"><div class="lab">Implied Valuation</div><div class="val big">${fmt(o.impliedVal, i.currency)}</div></div>
+      <div class="kpi"><div class="lab">Valuation Band</div><div class="val">${o.lowMultiple.toFixed(1)}× – ${o.highMultiple.toFixed(1)}×</div></div>
+      <div class="kpi"><div class="lab">Band (Low → High)</div><div class="val">${fmt(o.lowVal,i.currency)} → ${fmt(o.highVal,i.currency)}</div></div>
+    </section>
 
-      <!-- RESULTS IMAGE -->
-      <div class="imgwrap" style="margin-top:14px">
-        <img
-          src="${resultsImageSrc}"
-          alt="Customer experience powered by Kaizo"
-          loading="lazy"
-          style="width:100%;height:auto;border-radius:14px;border:1px solid rgba(255,255,255,.1);display:block;object-fit:cover"
-          data-hide-on-error
-        />
-      </div>
-      <div class="muted" style="margin-top:6px">Example visualization — replace with a product screenshot or customer logo wall.</div>
+    <section class="card">
+      <h2>Health Snapshot</h2>
+      <div class="kpi"><div class="lab">Rule of 40</div><div class="val ${o.r40>=40?'good':(o.r40<0?'warn':'')}">${o.r40.toFixed(0)}%</div></div>
+      <div class="kpi"><div class="lab">NRR</div><div class="val">${i.nrr}% <span class="muted">(${o.bands.nrrBand})</span></div></div>
+      <div class="kpi"><div class="lab">Gross Margin</div><div class="val">${i.grossMargin}% <span class="muted">(${o.bands.gmBand})</span></div></div>
+      <div class="kpi"><div class="lab">CAC Payback</div><div class="val">${i.cacPayback} mo <span class="muted">(${o.bands.pbBand})</span></div></div>
+      <div class="kpi"><div class="lab">Burn Multiple</div><div class="val">${i.burnMultiple.toFixed(1)}×</div></div>
     </section>
 
     <div class="rowbtn">
@@ -204,93 +242,84 @@ function screenResults(i){
         <button class="btn" id="restart">Start Over</button>
       </div>
       <button class="btn" id="download">Download CSV</button>
-    </div>`;
+    </div>
+  `;
 }
 
-// ---------- Bindings ----------
+// ---------- Wiring ----------
 function bindInputs(){
-  document.querySelectorAll('input').forEach(inp=>{
-    inp.addEventListener('input', e=>{
+  // Any input / select change → state
+  document.querySelectorAll('input,select').forEach(el=>{
+    el.addEventListener('input', e=>{
       const id = e.target.id;
       const val = (e.target.type === 'number') ? +e.target.value : e.target.value;
-      const map = {
-        s_ahtReductionPct:'ahtReductionPct',
-        s_qaAutomationPct:'qaAutomationPct',
-        s_managerHoursSaved:'managerHoursSaved',
-        s_csatUpliftPct:'csatUpliftPct',
-        s_annualRevenueAtRisk:'annualRevenueAtRisk',
-        s_revenueProtected:'revenueProtected'
-      };
-      const key = map[id] || id;
-      if (key in state.inputs) state.inputs[key] = val;
+      if (id in state.inputs) state.inputs[id] = val;
+      if (id in state.levers) state.levers[id] = val;
     });
   });
 }
 
 function bindNav(){
-  const c1 = $('continue1'); if(c1) c1.addEventListener('click', ()=>setStep(2));
-  const b2 = $('back2');     if(b2) b2.addEventListener('click',  ()=>setStep(1));
-  const c2 = $('continue2'); if(c2) c2.addEventListener('click', ()=>setStep(3));
-  const b3 = $('back3');     if(b3) b3.addEventListener('click',  ()=>setStep(2));
-  const rs = $('restart');   if(rs) rs.addEventListener('click',  ()=>{ state.inputs = {...state.inputs}; setStep(1); });
+  const c1 = $('continue1'); if (c1) c1.addEventListener('click', ()=>setStep(2));
+  const b2 = $('back2');     if (b2) b2.addEventListener('click', ()=>setStep(1));
+  const c2 = $('continue2'); if (c2) c2.addEventListener('click', ()=>setStep(3));
+  const b3 = $('back3');     if (b3) b3.addEventListener('click', ()=>setStep(2));
+  const rs = $('restart');   if (rs) rs.addEventListener('click', ()=>{ /* reset to defaults */; });
 
+  // Download CSV
   const dl = $('download');
   if (dl) dl.addEventListener('click', ()=>{
-    const i = state.inputs, o = compute(i);
+    const i = state.inputs, l = state.levers, o = compute(i,l);
     const rows = [
-      ['Metric','Value'],
-      ['Number of agents', i.agents],
-      ['Cost per agent / year', i.agentCostYear],
-      ['Tickets per month', i.ticketsPerMonth],
-      ['Baseline AHT (min)', i.aht],
-      ['AHT reduction %', i.ahtReductionPct],
-      ['QA hours baseline / agent / month', i.qaHoursBaseline],
-      ['QA automation %', i.qaAutomationPct],
-      ['Manager hours saved / agent / month', i.managerHoursSaved],
-      ['Annual revenue at risk', i.annualRevenueAtRisk],
-      ['CSAT uplift %', i.csatUpliftPct],
-      ['Revenue protected (annual)', Math.round(o.revenueProtected)],
-      ['AHT labor savings (annual)', Math.round(o.ahtSavings)],
-      ['QA automation savings (annual)', Math.round(o.qaSavings)],
-      ['Manager time savings (annual)', Math.round(o.mgrSavings)],
-      ['Total annual impact', Math.round(o.total)]
+      ['Field','Value'],
+      ['Currency', i.currency],
+      ['Stage', i.stage],
+      ['Sector', i.sector],
+      ['ARR', i.arr],
+      ['YoY Growth %', i.growth],
+      ['NRR %', i.nrr],
+      ['Gross Margin %', i.grossMargin],
+      ['EBIT Margin %', i.ebitMargin],
+      ['CAC Payback (months)', i.cacPayback],
+      ['Burn Multiple', i.burnMultiple],
+      ['Base Multiple', o.baseMultiple.toFixed(2)],
+      ['Adjusted Multiple', o.adjMultiple.toFixed(2)],
+      ['Implied Valuation', Math.round(o.impliedVal)],
+      ['Low Valuation', Math.round(o.lowVal)],
+      ['High Valuation', Math.round(o.highVal)]
     ];
     const csv = rows.map(r=>r.join(',')).join('\n');
     const blob = new Blob([csv], {type:'text/csv'});
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = 'kaizo-roi-snapshot.csv';
+    a.href = url; a.download = 'saas-valuation-dn.csv';
     document.body.appendChild(a); a.click();
     setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 400);
   });
 }
 
 function bindPresets(){
-  const foot = $('presetFoot');
-  if (foot) foot.addEventListener('click', ()=>{
-    state.inputs.ahtReductionPct = 75;
-    state.inputs.qaAutomationPct = Math.max(state.inputs.qaAutomationPct, 70);
-    state.inputs.managerHoursSaved = Math.max(state.inputs.managerHoursSaved, 1.5);
+  const log = $('presetLog');
+  if (log) log.addEventListener('click', ()=>{
+    Object.assign(state.inputs, {
+      sector:'Logistics SaaS', stage:'Series A',
+      arr: 7000000, growth: 75, nrr: 118, grossMargin: 72, ebitMargin:-15,
+      cacPayback: 14, burnMultiple: 1.4, customers: 150
+    });
     render();
   });
 
-  const t212 = $('presetT212');
-  if (t212) t212.addEventListener('click', ()=>{
-    state.inputs.csatUpliftPct = 93;
-    state.inputs.annualRevenueAtRisk = state.inputs.annualRevenueAtRisk || 500000;
-    state.inputs.revenueProtected = 0; // let auto-calc take over
-    render();
-  });
-
-  const g1 = $('presetG1');
-  if (g1) g1.addEventListener('click', ()=>{
-    const eff = throughputToAHTReduction(50); // ~33.3%
-    state.inputs.ahtReductionPct = Math.max(state.inputs.ahtReductionPct, +eff.toFixed(1));
+  const sus = $('presetSust');
+  if (sus) sus.addEventListener('click', ()=>{
+    Object.assign(state.inputs, {
+      sector:'Sustainability SaaS', stage:'Series A',
+      arr: 5000000, growth: 90, nrr: 125, grossMargin: 78, ebitMargin:-10,
+      cacPayback: 12, burnMultiple: 1.1, customers: 90
+    });
     render();
   });
 }
 
-// ---------- Router & render ----------
 function setStep(n){
   state.step = n;
   ['s1','s2','s3'].forEach((id,idx)=>{ const el=$(id); if(el) el.className = (idx < n) ? 'on' : ''; });
@@ -302,18 +331,13 @@ function render(){
   if (!app) return;
 
   if (state.step === 1) app.innerHTML = screenInputs(state.inputs);
-  if (state.step === 2) app.innerHTML = screenScenarios(state.inputs);
-  if (state.step === 3) app.innerHTML = screenResults(state.inputs);
-
-  // Hide optional images if they fail (keeps layout clean)
-  document.querySelectorAll('img[data-hide-on-error]').forEach(img => {
-    img.addEventListener('error', () => { img.style.display = 'none'; });
-  });
+  if (state.step === 2) app.innerHTML = screenLevers(state.inputs, state.levers);
+  if (state.step === 3) app.innerHTML = screenResults(state.inputs, state.levers);
 
   bindInputs();
   bindNav();
   bindPresets();
 }
 
-// ---------- Init ----------
+// Init
 window.addEventListener('DOMContentLoaded', render);
